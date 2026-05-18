@@ -106,6 +106,17 @@ module Notifications
     url    = suburl(sub_url) || "https://github.com/#{repo}"
     num    = d && d["number"]
 
+    latest_commit = nil
+    if type == "PullRequest" && notification["reason"] == "review_requested" && d
+      sha = d.dig("head", "sha")
+      commit_data = sha ? github_get("https://api.github.com/repos/#{repo}/commits/#{sha}", token: token) : nil
+      if commit_data
+        msg   = commit_data.dig("commit", "message").to_s.lines.first&.strip
+        pusher = commit_data.dig("author", "login") || commit_data.dig("commit", "author", "name")
+        latest_commit = { sha: sha[0, 7], message: msg, author: pusher }
+      end
+    end
+
     lines = []
     lines << "#{type_icon(type)} <b>#{escape_html(repo)}#{num ? " ##{num}" : ''}</b> · <i>#{escape_html(reason)}</i>"
     lines << "<b>#{rich(title)}</b>"
@@ -131,6 +142,11 @@ module Notifications
 
       revs = (d["requested_reviewers"] || []).map { |r| r["login"] }.compact.first(5)
       lines << "#{extra_icon('review')} reviewers: #{revs.map { |r| user_link(r) }.join(', ')}" unless revs.empty?
+    end
+
+    if latest_commit
+      sha_link = "<a href=\"https://github.com/#{repo}/commit/#{latest_commit[:sha]}\"><code>#{latest_commit[:sha]}</code></a>"
+      lines << "" << "🔨 new commit #{sha_link} by #{user_link(latest_commit[:author])}: #{rich(latest_commit[:message])}"
     end
 
     if lc && lc["body"]
