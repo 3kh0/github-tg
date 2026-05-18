@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.ruby-lsp/
+.bundle/
+vendor/bundle/
+tmp/
+log/
+*.log
+README.md
+Dockerfile
+.dockerignore
