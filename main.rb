@@ -166,19 +166,32 @@ else
 end
 
 
-Thread.new do
-  first_run = REDIS.get(LAST_MODIFIED_KEY).nil? && REDIS.zcard(SEEN_KEY).zero?
+BOOTED_AT       = Time.now
+$github_last_ok = nil
+
+GITHUB_THREAD = Thread.new do
+  first_run = nil
   loop do
     interval = POLL_INTERVAL
     begin
+      # computed inside the rescue: if Redis isn't reachable yet (e.g. right after a reboot)
+      # this must retry, not kill the thread
+      first_run = REDIS.get(LAST_MODIFIED_KEY).nil? && REDIS.zcard(SEEN_KEY).zero? if first_run.nil?
       server_interval = poll_github_once(first_run: first_run)
       first_run = false
+      $github_last_ok = Time.now
       interval = [server_interval || POLL_INTERVAL, POLL_INTERVAL].max
     rescue StandardError => e
       warn "github poll error: #{e.class}: #{e.message}"
     end
     sleep interval
   end
+end
+
+def github_poller_healthy?
+  return false unless GITHUB_THREAD.alive?
+  # allow a startup grace period, then require a successful poll within the last 10 minutes
+  $github_last_ok ? Time.now - $github_last_ok < 600 : Time.now - BOOTED_AT < 600
 end
 
 unless USE_WEBHOOK
@@ -201,11 +214,15 @@ end
 
 get "/health" do
   content_type :json
+  healthy = github_poller_healthy?
+  status(healthy ? 200 : 503)
   JSON.generate(
-    ok:            true,
-    mode:          USE_WEBHOOK ? "webhook" : "polling",
-    last_modified: REDIS.get(LAST_MODIFIED_KEY),
-    seen_count:    REDIS.zcard(SEEN_KEY)
+    ok:             healthy,
+    mode:           USE_WEBHOOK ? "webhook" : "polling",
+    github_poller:  GITHUB_THREAD.alive? ? "alive" : "dead",
+    github_last_ok: $github_last_ok&.utc&.iso8601,
+    last_modified:  (REDIS.get(LAST_MODIFIED_KEY) rescue nil),
+    seen_count:     (REDIS.zcard(SEEN_KEY) rescue nil)
   )
 end
 
